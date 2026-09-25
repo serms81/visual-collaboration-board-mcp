@@ -1,0 +1,7 @@
+# Changelog
+
+## 0.13.4 — 2026-09-25
+
+- First distribution snapshot separated from the private product and research repository.
+- Includes the local MCP server, browser UI, persistence, history, rich elements, resources, capture and test suite.
+- Verified locally on macOS with Node.js 24.

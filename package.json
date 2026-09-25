@@ -1,0 +1,23 @@
+{
+  "name": "visual-collaboration-board-mcp",
+  "version": "0.13.4",
+  "description": "A local MCP server and browser UI for a shared visual collaboration board.",
+  "type": "module",
+  "bin": {
+    "vcb-mcp": "bin/vcb-mcp.mjs"
+  },
+  "files": ["bin/", "src/"],
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node bin/vcb-mcp.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "playwright": "^1.63.0"
+  }
+}
