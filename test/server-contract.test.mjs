@@ -1,6 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderPng } from "../src/png.mjs";
@@ -56,6 +57,33 @@ test("human paths reject MCP deletion until force is explicit and remain undoabl
   assert.equal(undone.version, 1);
   const state = await ok(`/api/boards/${id}/state`);
   assert.equal(state.paths.some(path => path.id === human.id), true);
+});
+
+test("agent group identities persist in every path version", async () => {
+  const { boardId } = await post("/api/boards", { origin: "mcp", toolCallId: "groups-create" });
+  const result = await post(`/api/boards/${boardId}/agent-groups`, { origin: "mcp", toolCallId: "groups-add", groups: [
+    { name: "First", paths: [{ points: [[10, 10], [20, 20]] }, { points: [[30, 30], [40, 40]] }] },
+    { name: "Second", paths: [{ points: [[50, 50], [60, 60]] }] }
+  ] });
+  assert.equal(result.version, 3);
+  assert.deepEqual(result.groups.map(group => group.pathIds), [["a-1", "a-2"], ["a-3"]]);
+  const first = await ok(`/api/boards/${boardId}/versions/1`);
+  assert.deepEqual(first.groups.map(group => group.pathIds), [["a-1"]]);
+  const second = await ok(`/api/boards/${boardId}/versions/2`);
+  assert.deepEqual(second.groups.map(group => group.pathIds), [["a-1", "a-2"]]);
+  const third = await ok(`/api/boards/${boardId}/versions/3`);
+  assert.deepEqual(third.groups.map(group => group.pathIds), [["a-1", "a-2"], ["a-3"]]);
+  const persisted = JSON.parse(readFileSync(join(dataDir, "boards", `${boardId}.json`), "utf8"));
+  assert.deepEqual(persisted.groups.map(group => group.pathIds), [["a-1", "a-2"], ["a-3"]]);
+
+  const legacy = { ...persisted, groups: persisted.groups.slice(0, 1) };
+  writeFileSync(join(dataDir, "boards", `${boardId}.json`), JSON.stringify(legacy));
+  writeFileSync(join(dataDir, "states", `${boardId}-v3.json`), JSON.stringify(legacy));
+  const recoveredVersion = await ok(`/api/boards/${boardId}/versions/3`);
+  assert.deepEqual(recoveredVersion.groups.map(group => group.pathIds), [["a-1", "a-2"], ["a-3"]]);
+  const script = `const { ensureBoardServer, closeBoardServer } = await import(${JSON.stringify(new URL("../src/server.mjs", import.meta.url).href)}); await ensureBoardServer(); const response = await fetch("http://127.0.0.1:4227/api/boards/${boardId}/structure"); const value = await response.json(); console.log(JSON.stringify(value.groups.map(group => group.pathIds))); await closeBoardServer();`;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, VCB_PORT: "4227", VCB_DATA_DIR: dataDir }, encoding: "utf8" });
+  assert.deepEqual(JSON.parse(output.trim().split("\n").at(-1)), [["a-1", "a-2"], ["a-3"]]);
 });
 
 after(async () => { await closeBoardServer(); rmSync(dataDir, { recursive: true, force: true }); });

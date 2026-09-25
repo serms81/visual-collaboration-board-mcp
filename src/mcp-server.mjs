@@ -24,7 +24,7 @@ function failure(kind, toolCallId, error, extra = {}) {
   record(kind, { toolCallId, ...extra, outcome: "error", error: String(error) });
   return { isError: true, content: [{ type: "text", text: String(error) }] };
 }
-const server = new McpServer({ name: "visual-collaboration-board", version: "0.13.5" }, { capabilities: { resources: { subscribe: true } } });
+const server = new McpServer({ name: "visual-collaboration-board", version: "0.13.6" }, { capabilities: { resources: { subscribe: true } } });
 
 async function readBoardResource(uri, boardId, kind) {
   await ensureBoardServer();

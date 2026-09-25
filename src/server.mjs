@@ -113,12 +113,13 @@ function snapElement(board, element) {
   if (Number.isFinite(snapped.height)) snapped.height = Math.max(board.grid.size, snapCoordinate(board, snapped.height));
   return snapped;
 }
-function addPath(board, author, points, toolCallId = null, metadata = {}) {
+function addPath(board, author, points, toolCallId = null, metadata = {}, beforeSnapshot = null) {
   const prefix = author === "human" ? "h" : "a";
   board.nextPathNumber[author] += 1;
   const id = `${prefix}-${board.nextPathNumber[author]}`;
   const path = { id, author, color: author === "human" ? "#2459a6" : "#cf3b46", width: 5, points, ...metadata };
   board.paths.push(path); board.version += 1; board.capture = null;
+  beforeSnapshot?.(path);
   snapshot(board);
   const event = record("path-added", { boardId: board.id, version: board.version, id, author, toolCallId,
     pointCount: points.length, humanIds: board.paths.filter(p => p.author === "human").map(p => p.id),
@@ -131,11 +132,29 @@ function boardFrom(pathname) {
   return match ? { board: boards.get(match[1]), id: match[1], action: match[2] ?? "" } : null;
 }
 
+function recoverMissingGroups(state) {
+  const groups = Array.isArray(state.groups) ? state.groups : [];
+  const byId = new Map(groups.map(group => [group.id, group]));
+  for (const path of state.paths ?? []) {
+    if (!path.groupId) continue;
+    let group = byId.get(path.groupId);
+    if (!group) {
+      group = { id: path.groupId, name: path.groupName ?? path.groupId, author: path.author, pathIds: [] };
+      groups.push(group);
+      byId.set(group.id, group);
+    }
+    if (!Array.isArray(group.pathIds)) group.pathIds = [];
+    if (!group.pathIds.includes(path.id)) group.pathIds.push(path.id);
+  }
+  state.groups = groups;
+  return state;
+}
+
 function loadBoards() {
   for (const filename of readdirSync(join(evidenceDir, "boards"))) {
     if (!filename.endsWith(".json")) continue;
     try {
-      const value = JSON.parse(readFileSync(join(evidenceDir, "boards", filename), "utf8"));
+      const value = recoverMissingGroups(JSON.parse(readFileSync(join(evidenceDir, "boards", filename), "utf8")));
       if (!value?.id || !Number.isInteger(value.width) || !Number.isInteger(value.height)) continue;
       const persistedVersions = readdirSync(join(evidenceDir, "states")).filter(name => name.startsWith(`${value.id}-v`) && name.endsWith(".json")).map(name => Number(name.match(/-v(\d+)\.json$/)?.[1])).filter(Number.isInteger).sort((a, b) => a - b);
       const historyVersions = value.historyVersions ?? (persistedVersions.length ? persistedVersions : [value.version]);
@@ -148,7 +167,7 @@ loadBoards();
 function applyHistoryVersion(board, version) {
   const filename = `${board.id}-v${version}.json`;
   if (!existsSync(join(evidenceDir, "states", filename))) throw new Error("Board version not found");
-  const saved = JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8"));
+  const saved = recoverMissingGroups(JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8")));
   const subscribers = board.subscribers;
   const historyVersions = board.historyVersions;
   const historyCursor = board.historyCursor;
@@ -231,7 +250,7 @@ const server = createServer(async (req, res) => {
     const version = Number(versionMatch[1]);
     const filename = `${id}-v${version}.json`;
     if (!existsSync(join(evidenceDir, "states", filename))) return respondJson(res, 404, { error: "Board version not found", boardId: id, version });
-    return respondJson(res, 200, JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8")));
+    return respondJson(res, 200, recoverMissingGroups(JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8"))));
   }
   if (req.method === "POST" && action === "restore-version") {
     try {
@@ -239,7 +258,7 @@ const server = createServer(async (req, res) => {
       if (!Number.isInteger(input.version) || input.version < 0) throw new Error("Expected a board version");
       const filename = `${id}-v${input.version}.json`;
       if (!existsSync(join(evidenceDir, "states", filename))) throw new Error("Board version not found");
-      const saved = JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8"));
+      const saved = recoverMissingGroups(JSON.parse(readFileSync(join(evidenceDir, "states", filename), "utf8")));
       const subscribers = board.subscribers; const restoredVersion = board.version + 1;
       Object.assign(board, saved, { version: restoredVersion, capture: null, subscribers });
       snapshot(board);
@@ -357,9 +376,10 @@ const server = createServer(async (req, res) => {
       const created = input.groups.map(group => {
         board.nextGroupNumber += 1;
         const groupId = `g-${board.nextGroupNumber}`;
-        const pathIds = group.paths.map(path => addPath(board, "agent", path.points, input.toolCallId, { groupId, groupName: group.name.trim() }).id);
-        board.groups.push({ id: groupId, name: group.name.trim(), author: "agent", pathIds });
-        return { id: groupId, name: group.name.trim(), pathIds };
+        const record = { id: groupId, name: group.name.trim(), author: "agent", pathIds: [] };
+        board.groups.push(record);
+        for (const path of group.paths) addPath(board, "agent", path.points, input.toolCallId, { groupId, groupName: record.name }, added => record.pathIds.push(added.id));
+        return { id: groupId, name: record.name, pathIds: [...record.pathIds] };
       });
       const humanPathsUnchanged = beforeHuman === JSON.stringify(board.paths.filter(path => path.author === "human"));
       return respondJson(res, 201, { boardId: id, version: board.version, groups: created, humanPathsUnchanged });

@@ -1,6 +1,6 @@
 {
   "name": "visual-collaboration-board-mcp",
-  "version": "0.13.5",
+  "version": "0.13.6",
   "description": "A local MCP server and browser UI for a shared visual collaboration board.",
   "type": "module",
   "bin": {
