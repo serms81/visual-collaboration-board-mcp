@@ -24,7 +24,7 @@ function failure(kind, toolCallId, error, extra = {}) {
   record(kind, { toolCallId, ...extra, outcome: "error", error: String(error) });
   return { isError: true, content: [{ type: "text", text: String(error) }] };
 }
-const server = new McpServer({ name: "visual-collaboration-board", version: "0.13.3" }, { capabilities: { resources: { subscribe: true } } });
+const server = new McpServer({ name: "visual-collaboration-board", version: "0.13.5" }, { capabilities: { resources: { subscribe: true } } });
 
 async function readBoardResource(uri, boardId, kind) {
   await ensureBoardServer();
@@ -180,12 +180,15 @@ server.registerTool("get_board_svg", {
   } catch (error) { return failure("get_board_svg", toolCallId, error, { boardId }); }
 });
 
+const boardPointSchema = z.tuple([z.number(), z.number()]).describe("[x, y] as JSON numbers in board coordinates; origin at top left, x right, y down. One unit equals one pixel of the canvas bitmap at native board size. Browser zoom does not change these values.");
+const boardPointsSchema = z.array(boardPointSchema).min(2).max(512).describe("Ordered board points, for example [[10, 20], [100, 20]]. Use numbers without quotes; x is within 0..board width and y within 0..board height.");
+
 server.registerTool("add_agent_paths", {
   title: "Add paths to the open board",
-  description: "Add 1–4 new red paths to the board using numeric board coordinates. Use get_board_structure for its width and height. Preserve all human paths. The open browser updates automatically.",
+  description: "Add 1–4 new red paths. Each path has points: [[x, y], ...] with JSON numbers, not quoted strings. Coordinates use the board's native canvas size: top-left origin, x right, y down; browser zoom does not change them. Use get_board_structure for width and height. Preserve all human paths. The open browser updates automatically.",
   inputSchema: z.object({
     boardId: z.string().min(1),
-    paths: z.array(z.object({ points: z.array(z.tuple([z.number(), z.number()])).min(2).max(512) })).min(1).max(4)
+    paths: z.array(z.object({ points: boardPointsSchema })).min(1).max(4)
   })
 }, async ({ boardId, paths }) => {
   const toolCallId = randomUUID();
@@ -202,10 +205,10 @@ server.registerTool("add_agent_paths", {
 
 server.registerTool("add_agent_groups", {
   title: "Add named semantic groups to the open board",
-  description: "Add 1–4 named red groups, each composed of 1–32 paths. Each point is a numeric [x, y] coordinate within the board dimensions returned by get_board_structure. Groups give related paths a stable semantic identity so they can be removed or replaced together. Preserve all human paths.",
+  description: "Add 1–4 named red groups, each composed of 1–32 paths. Each path uses points: [[x, y], ...] with JSON numbers, not quoted strings, in the board's native canvas coordinates. The origin is top left; x goes right and y down. Use get_board_structure for width and height. Groups can be removed or replaced together; preserve all human paths.",
   inputSchema: z.object({
     boardId: z.string().min(1),
-    groups: z.array(z.object({ name: z.string().min(1), paths: z.array(z.object({ points: z.array(z.tuple([z.number(), z.number()])).min(2).max(512) })).min(1).max(32) })).min(1).max(4)
+    groups: z.array(z.object({ name: z.string().min(1), paths: z.array(z.object({ points: boardPointsSchema })).min(1).max(32) })).min(1).max(4)
   })
 }, async ({ boardId, groups }) => {
   const toolCallId = randomUUID();
@@ -237,17 +240,19 @@ server.registerTool("get_board_structure", {
 
 const richElementSchema = z.object({
   type: z.enum(["text", "rectangle", "ellipse", "line", "arrow"]),
-  x: z.number().optional(), y: z.number().optional(),
-  width: z.number().positive().optional(), height: z.number().positive().optional(),
+  x: z.number().describe("Horizontal board coordinate as a JSON number; 0 is the left edge.").optional(),
+  y: z.number().describe("Vertical board coordinate as a JSON number; 0 is the top edge.").optional(),
+  width: z.number().positive().describe("Width in native board coordinate units.").optional(),
+  height: z.number().positive().describe("Height in native board coordinate units.").optional(),
   text: z.string().optional(),
   fontSize: z.number().positive().optional(),
-  points: z.array(z.tuple([z.number(), z.number()])).min(2).max(512).optional(),
+  points: boardPointsSchema.optional(),
   color: z.string().optional(), strokeWidth: z.number().positive().optional()
 });
 
 server.registerTool("add_elements", {
   title: "Add text and basic shapes",
-  description: "Add agent-owned text, rectangles, ellipses, lines or arrows. Elements receive stable ids and render in the open browser and SVG. This does not alter human paths.",
+  description: "Add agent-owned text, rectangles, ellipses, lines or arrows. For a line or arrow, use points: [[10, 20], [100, 20]] with JSON numbers, not quoted strings. For text, rectangles and ellipses, use numeric x/y; sizes use numeric width/height. Coordinates use the board's native canvas size with a top-left origin and do not change with browser zoom. Elements receive stable ids and render in the browser and SVG; human paths stay intact.",
   inputSchema: z.object({ boardId: z.string().min(1), elements: z.array(richElementSchema).min(1).max(16) })
 }, async ({ boardId, elements }) => {
   const toolCallId = randomUUID();
